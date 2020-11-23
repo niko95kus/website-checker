@@ -6,7 +6,7 @@ from requests.packages.urllib3.util.retry import Retry
 from lxml.html import fromstring
 import csv
 import traceback
-
+import argparse
 import signal
 import time
 import sys
@@ -28,11 +28,11 @@ def exit_gracefully(signum, frame):
 	# restore the exit gracefully handler here    
 	signal.signal(signal.SIGINT, exit_gracefully)
 
-def checkHTTPS(url):
-	r = requests.get('https://' + url, verify=False)
+def checkHTTPS(url, headers, nosslCheck):
+	r = requests.get('https://' + url, headers=headers, verify=nosslCheck)
 	getData(url, r, True)
 
-def getData(url, r, checkedHttps = False):
+def getData(url, r, headers, checkedHttps = False):
 	global protocol,redirect,server,title,rc,rcHistory,wordpress,error
 
 	try:
@@ -45,16 +45,25 @@ def getData(url, r, checkedHttps = False):
 		else:
 			server = ''
 
-		# check wordpress
-		if 'wordpress' in r.content.lower() or 'wp-content' in r.content.lower():
-			wordpress = 'yes'
-		else:
-			wordpress = 'no'
+		# cek kontent
+		try:
+			# check wordpress
+			if 'wordpress' in r.content.lower() or 'wp-content' in r.content.lower():
+				wordpress = 'yes'
+			else:
+				wordpress = 'no'
 
-		# get title
-		tree = fromstring(r.content)
-		title = tree.findtext('.//title')
-		title = title.encode('utf-8').strip()
+			# get title
+			tree = fromstring(r.content)
+			title = tree.findtext('.//title')
+
+			if title is not None:
+				title = title.encode('utf-8').strip()
+			else:
+				title = ''
+		except Exception as e:
+			error = 'ERROR get request content:' + str(e)
+			print error
 
 		# cek kalo redirect ke HTTPS
 		if 'https://' in lastUrl:
@@ -67,13 +76,13 @@ def getData(url, r, checkedHttps = False):
 			protocol = 'http'
 
 			try:
-				checkHTTPS(url)
+				checkHTTPS(url, headers, args.nossl_check)
 			except Exception as e:
 				error = 'ERROR HTTPS:' + str(e)
 				print error
 
-		# cek kalo dari HTTP redirect ke HTTPS
-		if 'Response [30' in rcHistory:
+		# kalo ada response 30x dan last URL nya https, berarti redirect ke https
+		if ('Response [30' in rcHistory) and ('https://' in lastUrl):
 			redirect = 'redirect'
 		else:
 			redirect = 'no redirect'
@@ -85,13 +94,23 @@ def getData(url, r, checkedHttps = False):
 original_sigint = signal.getsignal(signal.SIGINT)
 signal.signal(signal.SIGINT, exit_gracefully)
 
+parser = argparse.ArgumentParser(description='Website Checker')
+parser.add_argument('-i', '--input', type=str, help='Input file for website list')
+parser.add_argument('-o', '--output', default='output.csv', type=str, help='Output file in csv format (default: output.csv)')
+parser.add_argument('--nossl-check', action='store_false', help='Disable SSL certificate check')
+
+if len(sys.argv) == 1:
+	parser.print_help(sys.stderr)
+	sys.exit(1)
+
+args = parser.parse_args()
+print args
+
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2490.80 Safari/537.36',
-    'Content-Type': 'text/html',
 }
 
-# f = open('contoh.txt', 'r')
-f = open('contoh.txt', 'r')
+f = open(args.input, 'r')
 lines = f.readlines()
 totalWebsite = len(lines)
 f.close()
@@ -101,7 +120,7 @@ row = totalWebsite
 
 i = 0
 
-with open('tes.csv', mode='wb') as webFile:
+with open(args.output, mode='wb') as webFile:
 	# global protocol,redirect,server,title,rc,rcHistory,wordpress,error
 	protocol = redirect = server = title = rc = rcHistory = wordpress = error = ''
 
@@ -122,8 +141,8 @@ with open('tes.csv', mode='wb') as webFile:
 
 			arr[0] = url
 
-			r = requests.get('http://' + url)
-			getData(url, r)
+			r = requests.get('http://' + url, headers=headers, verify=args.nossl_check)
+			getData(url, r, headers)
 
 			arr[1] = protocol
 			arr[2] = redirect
@@ -132,22 +151,22 @@ with open('tes.csv', mode='wb') as webFile:
 			arr[6] = title
 			arr[7] = wordpress
 
-			if error:
-				print 'print error'
-			else:
-				print 'Protocol:' + protocol
-				print 'Redirect:' + redirect
-				print 'Server:' + server
-				print 'Title:' + title
-				print 'Last Status code:' + rc
-				print 'Status history:' + rcHistory
-				print 'Is wordpress:' + wordpress
+			# if error:
+			# 	print error
+			# else:
+			print 'Protocol:' + protocol
+			print 'Redirect:' + redirect
+			print 'Server:' + server
+			print 'Title:' + title
+			print 'Last Status code:' + rc
+			print 'Status history:' + rcHistory
+			print 'Is wordpress:' + wordpress
 
 		except TypeError as e:
-			error = 'ERROR no website. please double check. ORIGINAL ERROR:' + str(e)
+			error = 'ERROR:' + str(e)
 			print error
 		except UnicodeEncodeError as e:
-			error = 'ERROR UnicodeEncodeError. please double check. ORIGINAL ERROR:' + str(e)
+			error = 'ERROR:' + str(e)
 			print error
 		except Exception as e:
 			error = 'ERROR HTTP:' + str(e)
@@ -156,7 +175,7 @@ with open('tes.csv', mode='wb') as webFile:
 			# tes HTTPS
 			try:
 				print 'checking HTTPS because can\'t connect with HTTP'
-				checkHTTPS(url)
+				checkHTTPS(url, headers, args.nossl_check)
 			except Exception as e:
 				error += '. error HTTPS:' + str(e)
 				print error
@@ -166,7 +185,8 @@ with open('tes.csv', mode='wb') as webFile:
 			try:
 				writer.writerow(arr)
 			except Exception as e:
-				arr[1] = arr[2] = arr[3] = arr[5] = arr[6] = arr[7] = ''
+				arr[6] =  ''
+				# arr[1] = arr[2] = arr[3] = arr[5] = arr[6] = arr[7] = ''
 				arr[4] = 'Please check manual. ERROR write csv:' + str(e) + arr[4]
 
 				writer.writerow(arr)				
